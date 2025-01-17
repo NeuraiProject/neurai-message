@@ -1,7 +1,7 @@
 {
-  "name": "@ravenrebels/ravencoin-message",
+  "name": "@neuraiproject/neurai-message",
   "version": "0.7.0",
-  "description": "Sign and Verify messages in Ravencoin",
+  "description": "Sign and Verify messages in Neurai",
   "source": "index.ts",
   "main": "dist/main.js",
   "module": "dist/module.js",
@@ -12,18 +12,18 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ravenrebels/ravencoin-message.git"
+    "url": "git+https://github.com/neuraiproject/neurai-message.git"
   },
   "keywords": [
-    "Ravencoin",
-    "RVN"
+    "Neurai",
+    "XNA"
   ],
-  "author": "Dick Henrik Larsson / Raven Rebels",
+  "author": "Dick Henrik Larsson / Neurai",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/ravenrebels/ravencoin-message/issues"
+    "url": "https://github.com/neuraiproject/neurai-message/issues"
   },
-  "homepage": "https://github.com/ravenrebels/ravencoin-message#readme",
+  "homepage": "https://github.com/neuraiproject/neurai-message#readme",
   "dependencies": {
     "bitcoinjs-message": "^2.2.0"
   },
