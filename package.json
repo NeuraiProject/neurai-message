@@ -1,6 +1,6 @@
 {
   "name": "@neuraiproject/neurai-message",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Sign and Verify messages in Neurai",
   "source": "index.ts",
   "main": "dist/main.js",
@@ -18,7 +18,7 @@
     "Neurai",
     "XNA"
   ],
-  "author": "Dick Henrik Larsson / Neurai",
+  "author": "Neuraiproject",
   "license": "ISC",
   "bugs": {
     "url": "https://github.com/neuraiproject/neurai-message/issues"
