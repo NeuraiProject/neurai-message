@@ -1,6 +1,6 @@
 # neurai-message
 
-Sign and Verify messages in Neurai in JavaScript, primarly for Node.js
+Sign and verify messages in Neurai in JavaScript for Node.js and modern browsers.
 
 ## Scope
 
@@ -10,6 +10,12 @@ The package supports two formats:
 
 - `legacy`: classic compact `secp256k1` signature encoded in base64 for `P2PKH` / `CKeyID` addresses
 - `PQ`: Base64 payload `0x35 || CompactSize(pubkey) || pubkey || CompactSize(signature) || signature`
+
+## Implementation notes
+
+- `legacy` signing and recovery are implemented locally on top of `@noble/secp256k1`
+- `PQ` signing and verification use `@noble/post-quantum/ml-dsa.js`
+- the package no longer depends on `bitcoinjs-message`, `secp256k1`, or `elliptic`
 
 ## Post-Quantum note
 
@@ -26,24 +32,26 @@ The generic `verifyMessage(...)` function now auto-detects both formats. Use `si
 
 `signPQMessage(...)` expects the ML-DSA-44 secret key and the corresponding public key, either raw (`1312` bytes) or serialized as `0x05 || pubkey`.
 
-## If you want to use it in the browser, use Browserify
+## Package outputs
 
-@neuraiproject/neurai-message is based on 'bitcoinjs-lib' which uses tons of Node stuff.
+This package now publishes explicit entry points:
 
-To make that work in the browser you need to use Browserify
+- `@neuraiproject/neurai-message`: main API for Node.js and bundlers
+- `@neuraiproject/neurai-message/browser`: browser ESM build
+- `@neuraiproject/neurai-message/global`: global bundle for `<script src>`
 
 ## install
 
-```
+```bash
 npm install @neuraiproject/neurai-message
 
-//If you need to sign messages,  install CoinKey
+# If you need to sign legacy messages from WIF, install CoinKey
 npm install coinkey
 ```
 
-## How to use
+## How to use in Node.js
 
-```
+```js
 const { sign, verifyMessage } = require("@neuraiproject/neurai-message");
 
 //coinkey helps us convert from WIF to privatekey
@@ -97,3 +105,27 @@ const CoinKey = require("coinkey");
 }
 
 ```
+
+## How to use in browser ESM
+
+```js
+import { signPQMessage, verifyMessage } from "@neuraiproject/neurai-message/browser";
+```
+
+## How to use with a global bundle
+
+```html
+<script src="./node_modules/@neuraiproject/neurai-message/dist/NeuraiMessage.global.js"></script>
+<script>
+  const ok = NeuraiMessage.verifyMessage(message, address, signature);
+  console.log(ok);
+</script>
+```
+
+## Development
+
+```bash
+npm test
+```
+
+Tests run with `vitest` and cover both `legacy` and `PQ` flows.

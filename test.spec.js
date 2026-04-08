@@ -5,7 +5,7 @@ const {
   signPQMessage,
   verifyMessage,
   verifyPQMessage,
-} = require("./dist/main");
+} = require("./dist/index.cjs");
 
 const compressed = true;
 const privateKey = Buffer.from(
@@ -31,8 +31,8 @@ test("Verify unvalid message signature", () => {
   expect(result).toBe(false);
 });
 
-test("Verify valid PQ message signature", () => {
-  return import("@noble/post-quantum/ml-dsa.js").then(({ ml_dsa44 }) => {
+test("Verify valid PQ message signature", async () => {
+  const { ml_dsa44 } = await import("@noble/post-quantum/ml-dsa.js");
   const seed = Buffer.alloc(32, 7);
   const keys = ml_dsa44.keygen(seed);
   const serializedPublicKey = Buffer.concat([
@@ -50,11 +50,10 @@ test("Verify valid PQ message signature", () => {
 
   expect(verifyPQMessage(pqMessage, pqAddress, pqSignature)).toBe(true);
   expect(verifyMessage(pqMessage, pqAddress, pqSignature)).toBe(true);
-  });
 });
 
-test("Reject invalid PQ message signature", () => {
-  return import("@noble/post-quantum/ml-dsa.js").then(({ ml_dsa44 }) => {
+test("Reject invalid PQ message signature", async () => {
+  const { ml_dsa44 } = await import("@noble/post-quantum/ml-dsa.js");
   const seed = Buffer.alloc(32, 9);
   const keys = ml_dsa44.keygen(seed);
   const serializedPublicKey = Buffer.concat([
@@ -73,5 +72,4 @@ test("Reject invalid PQ message signature", () => {
   expect(verifyMessage(pqMessage + " changed", pqAddress, pqSignature)).toBe(
     false
   );
-  });
 });
