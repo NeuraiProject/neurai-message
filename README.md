@@ -4,7 +4,7 @@ Sign and verify messages in Neurai in JavaScript for Node.js and modern browsers
 
 ## Scope
 
-This package follows the current Neurai `signmessage` / `verifymessage` behavior for `legacy` signatures and also exposes the new `PQ` message-signature format.
+This package follows the current Neurai `signmessage` / `verifymessage` behavior for `legacy` signatures and also exposes the current `PQ` message-signature format bound to `AuthScript` witness-v1 addresses.
 
 The package supports two formats:
 
@@ -25,12 +25,15 @@ Instead, the exported signature embeds the serialized public key and the `ML-DSA
 
 - decode the Base64 payload
 - extract the serialized PQ public key
-- confirm `HASH160(pubkey_serialized)` matches the witness v1 program in the address
+- derive the default `AuthScript` commitment for `auth_type=0x01` and `witnessScript=OP_TRUE`
+- confirm that 32-byte commitment matches the witness v1 program in the address
 - verify the `ML-DSA-44` signature over the Neurai message hash
 
 The generic `verifyMessage(...)` function now auto-detects both formats. Use `sign(...)` for legacy and `signPQMessage(...)` for PQ.
 
 `signPQMessage(...)` expects the ML-DSA-44 secret key and the corresponding public key, either raw (`1312` bytes) or serialized as `0x05 || pubkey`.
+
+Legacy PQ witness-v1 keyhash addresses (`OP_1 <20-byte-hash>`) are intentionally not supported anymore. The package now matches the current Neurai `AuthScript` destination model (`OP_1 <32-byte-commitment>`).
 
 ## Package outputs
 
@@ -88,12 +91,25 @@ const CoinKey = require("coinkey");
   const crypto = require("crypto");
   const { signPQMessage, verifyPQMessage } = require("@neuraiproject/neurai-message");
 
+  function taggedHash(tag, bytes) {
+    const tagHash = crypto.createHash("sha256").update(tag).digest();
+    return crypto.createHash("sha256").update(Buffer.concat([tagHash, tagHash, bytes])).digest();
+  }
+
   const keys = ml_dsa44.keygen();
   const serializedPubKey = Buffer.concat([Buffer.from([0x05]), Buffer.from(keys.publicKey)]);
-  const program = crypto.createHash("ripemd160").update(
-    crypto.createHash("sha256").update(serializedPubKey).digest()
-  ).digest();
-  const words = bech32m.toWords(program);
+  const authDescriptor = Buffer.concat([
+    Buffer.from([0x01]),
+    crypto.createHash("ripemd160").update(
+      crypto.createHash("sha256").update(serializedPubKey).digest()
+    ).digest(),
+  ]);
+  const witnessScriptHash = crypto.createHash("sha256").update(Buffer.from([0x51])).digest(); // OP_TRUE
+  const commitment = taggedHash(
+    "NeuraiAuthScript",
+    Buffer.concat([Buffer.from([0x01]), authDescriptor, witnessScriptHash])
+  );
+  const words = bech32m.toWords(commitment);
   words.unshift(1);
   const address = bech32m.encode("tnq", words);
 

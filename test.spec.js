@@ -16,6 +16,30 @@ const address = "RVDUQTULaceEudDsgqCQBT6bfcdqUSvJPV";
 const message = "Hello world";
 const signature = sign(message, privateKey, compressed);
 
+function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest();
+}
+
+function taggedHash(tag, bytes) {
+  const tagHash = sha256(Buffer.from(tag, "utf8"));
+  return sha256(Buffer.concat([tagHash, tagHash, Buffer.from(bytes)]));
+}
+
+function createDefaultPQAuthScriptAddress(hrp, serializedPublicKey) {
+  const authDescriptor = Buffer.concat([
+    Buffer.from([0x01]),
+    createHash("ripemd160").update(sha256(serializedPublicKey)).digest(),
+  ]);
+  const witnessScriptHash = sha256(Buffer.from([0x51]));
+  const commitment = taggedHash(
+    "NeuraiAuthScript",
+    Buffer.concat([Buffer.from([0x01]), authDescriptor, witnessScriptHash])
+  );
+  const words = bech32m.toWords(commitment);
+  words.unshift(1);
+  return bech32m.encode(hrp, words);
+}
+
 test("Verify valid message signature", () => {
   const result = verifyMessage(message, address, signature);
 
@@ -39,12 +63,7 @@ test("Verify valid PQ message signature", async () => {
     Buffer.from([0x05]),
     Buffer.from(keys.publicKey),
   ]);
-  const program = createHash("ripemd160")
-    .update(createHash("sha256").update(serializedPublicKey).digest())
-    .digest();
-  const words = bech32m.toWords(program);
-  words.unshift(1);
-  const pqAddress = bech32m.encode("tnq", words);
+  const pqAddress = createDefaultPQAuthScriptAddress("tnq", serializedPublicKey);
   const pqMessage = "Hello from PQ";
   const pqSignature = signPQMessage(pqMessage, keys.secretKey, keys.publicKey);
 
@@ -60,16 +79,32 @@ test("Reject invalid PQ message signature", async () => {
     Buffer.from([0x05]),
     Buffer.from(keys.publicKey),
   ]);
-  const program = createHash("ripemd160")
-    .update(createHash("sha256").update(serializedPublicKey).digest())
-    .digest();
-  const words = bech32m.toWords(program);
-  words.unshift(1);
-  const pqAddress = bech32m.encode("tnq", words);
+  const pqAddress = createDefaultPQAuthScriptAddress("tnq", serializedPublicKey);
   const pqMessage = "Hello from PQ";
   const pqSignature = signPQMessage(pqMessage, keys.secretKey, keys.publicKey);
 
   expect(verifyMessage(pqMessage + " changed", pqAddress, pqSignature)).toBe(
     false
   );
+});
+
+test("Reject old PQ witness-v1 keyhash addresses", async () => {
+  const { ml_dsa44 } = await import("@noble/post-quantum/ml-dsa.js");
+  const seed = Buffer.alloc(32, 11);
+  const keys = ml_dsa44.keygen(seed);
+  const serializedPublicKey = Buffer.concat([
+    Buffer.from([0x05]),
+    Buffer.from(keys.publicKey),
+  ]);
+  const oldProgram = createHash("ripemd160")
+    .update(sha256(serializedPublicKey))
+    .digest();
+  const words = bech32m.toWords(oldProgram);
+  words.unshift(1);
+  const oldPqAddress = bech32m.encode("tnq", words);
+  const pqMessage = "Hello from PQ";
+  const pqSignature = signPQMessage(pqMessage, keys.secretKey, keys.publicKey);
+
+  expect(verifyPQMessage(pqMessage, oldPqAddress, pqSignature)).toBe(false);
+  expect(verifyMessage(pqMessage, oldPqAddress, pqSignature)).toBe(false);
 });

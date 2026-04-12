@@ -10,6 +10,11 @@ const PQ_SERIALIZED_PUBKEY_PREFIX = 0x05;
 const PQ_PUBLIC_KEY_LENGTH = 1312;
 const PQ_SERIALIZED_PUBKEY_LENGTH = 1 + PQ_PUBLIC_KEY_LENGTH;
 const PQ_SIGNATURE_LENGTH = 2420;
+const AUTHSCRIPT_PROGRAM_LENGTH = 32;
+const AUTHSCRIPT_DEFAULT_AUTH_TYPE = 0x01;
+const AUTHSCRIPT_DOMAIN_SEPARATOR = 0x01;
+const AUTHSCRIPT_DEFAULT_WITNESS_SCRIPT = Buffer.from([0x51]); // OP_TRUE
+const AUTHSCRIPT_TAG = "NeuraiAuthScript";
 const LEGACY_MESSAGE_PREFIX =
   String.fromCharCode(Buffer.byteLength(MESSAGE_MAGIC, "utf8")) +
   MESSAGE_MAGIC;
@@ -83,6 +88,11 @@ function hash160(bytes: Uint8Array) {
   return createHash("ripemd160").update(sha256(bytes)).digest();
 }
 
+function taggedHash(tag: string, bytes: Uint8Array) {
+  const tagHash = sha256(Buffer.from(tag, "utf8"));
+  return sha256(Buffer.concat([tagHash, tagHash, Buffer.from(bytes)]));
+}
+
 function encodeMessageHash(message: string) {
   const messageBytes = Buffer.from(message, "utf8");
   const magicBytes = Buffer.from(MESSAGE_MAGIC, "utf8");
@@ -135,6 +145,21 @@ function decodePQAddress(address: string) {
     version: decoded.words[0],
     program: Buffer.from(bech32m.fromWords(decoded.words.slice(1))),
   };
+}
+
+function getDefaultPQAuthScriptCommitment(serializedPublicKey: Uint8Array) {
+  const authDescriptor = Buffer.concat([
+    Buffer.from([AUTHSCRIPT_DEFAULT_AUTH_TYPE]),
+    hash160(serializedPublicKey),
+  ]);
+  const witnessScriptHash = sha256(AUTHSCRIPT_DEFAULT_WITNESS_SCRIPT);
+  const preimage = Buffer.concat([
+    Buffer.from([AUTHSCRIPT_DOMAIN_SEPARATOR]),
+    authDescriptor,
+    witnessScriptHash,
+  ]);
+
+  return taggedHash(AUTHSCRIPT_TAG, preimage);
 }
 
 /** returns a base64 encoded string representation of the legacy signature */
@@ -227,11 +252,16 @@ export function verifyPQMessage(
     }
 
     const decodedAddress = decodePQAddress(address);
-    if (decodedAddress.version !== 1 || decodedAddress.program.length !== 20) {
+    if (
+      decodedAddress.version !== 1 ||
+      decodedAddress.program.length !== AUTHSCRIPT_PROGRAM_LENGTH
+    ) {
       return false;
     }
 
-    const expectedProgram = hash160(serializedPublicKey);
+    const expectedProgram = getDefaultPQAuthScriptCommitment(
+      serializedPublicKey
+    );
     if (!expectedProgram.equals(decodedAddress.program)) {
       return false;
     }

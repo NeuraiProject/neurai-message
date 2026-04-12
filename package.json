@@ -1,6 +1,6 @@
 {
   "name": "@neuraiproject/neurai-message",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Sign and Verify messages in Neurai",
   "source": "index.ts",
   "main": "dist/index.cjs",
