@@ -1,10 +1,24 @@
-import { Buffer } from "buffer";
-import createHash from "create-hash";
-import { bech32m } from "bech32";
 import { ml_dsa44 } from "@noble/post-quantum/ml-dsa.js";
+import { bech32m } from "@scure/base";
+import {
+  asBech32String,
+  bytesEqual,
+  concatBytes,
+  decodeCompactSize,
+  encodeCompactSize,
+  fromBase64,
+  toBase64,
+  utf8ToBytes,
+} from "./bytes";
+import { hash160, hash256, sha256, taggedHash } from "./hash";
 import { signLegacyMessage, verifyLegacyCompactMessage } from "./legacy-message";
 
 const MESSAGE_MAGIC = "Neurai Signed Message:\n";
+const MESSAGE_MAGIC_BYTES = utf8ToBytes(MESSAGE_MAGIC);
+const LEGACY_MESSAGE_PREFIX = concatBytes(
+  encodeCompactSize(MESSAGE_MAGIC_BYTES.length),
+  MESSAGE_MAGIC_BYTES
+);
 const PQ_MESSAGE_SIGNATURE_PREFIX = 0x35;
 const PQ_SERIALIZED_PUBKEY_PREFIX = 0x05;
 const PQ_PUBLIC_KEY_LENGTH = 1312;
@@ -13,129 +27,50 @@ const PQ_SIGNATURE_LENGTH = 2420;
 const AUTHSCRIPT_PROGRAM_LENGTH = 32;
 const AUTHSCRIPT_DEFAULT_AUTH_TYPE = 0x01;
 const AUTHSCRIPT_DOMAIN_SEPARATOR = 0x01;
-const AUTHSCRIPT_DEFAULT_WITNESS_SCRIPT = Buffer.from([0x51]); // OP_TRUE
+const AUTHSCRIPT_DEFAULT_WITNESS_SCRIPT = Uint8Array.of(0x51); // OP_TRUE
 const AUTHSCRIPT_TAG = "NeuraiAuthScript";
-const LEGACY_MESSAGE_PREFIX =
-  String.fromCharCode(Buffer.byteLength(MESSAGE_MAGIC, "utf8")) +
-  MESSAGE_MAGIC;
-
-function encodeCompactSize(value: number): Buffer {
-  if (!Number.isInteger(value) || value < 0) {
-    throw new Error("CompactSize value must be a non-negative integer");
-  }
-
-  if (value < 253) {
-    return Buffer.from([value]);
-  }
-
-  if (value <= 0xffff) {
-    const buffer = Buffer.alloc(3);
-    buffer[0] = 0xfd;
-    buffer.writeUInt16LE(value, 1);
-    return buffer;
-  }
-
-  if (value <= 0xffffffff) {
-    const buffer = Buffer.alloc(5);
-    buffer[0] = 0xfe;
-    buffer.writeUInt32LE(value, 1);
-    return buffer;
-  }
-
-  throw new Error("CompactSize values above uint32 are not supported");
-}
-
-function decodeCompactSize(buffer: Buffer, offset: number) {
-  if (offset >= buffer.length) {
-    throw new Error("Unexpected end of CompactSize data");
-  }
-
-  const first = buffer[offset];
-  if (first < 253) {
-    return { value: first, offset: offset + 1 };
-  }
-
-  if (first === 0xfd) {
-    if (offset + 3 > buffer.length) {
-      throw new Error("Unexpected end of CompactSize uint16 data");
-    }
-    return { value: buffer.readUInt16LE(offset + 1), offset: offset + 3 };
-  }
-
-  if (first === 0xfe) {
-    if (offset + 5 > buffer.length) {
-      throw new Error("Unexpected end of CompactSize uint32 data");
-    }
-    return { value: buffer.readUInt32LE(offset + 1), offset: offset + 5 };
-  }
-
-  if (first === 0xff) {
-    throw new Error("CompactSize uint64 is not supported");
-  }
-
-  throw new Error("Invalid CompactSize prefix");
-}
-
-function sha256(bytes: Uint8Array) {
-  return createHash("sha256").update(bytes).digest();
-}
-
-function hash256(bytes: Uint8Array) {
-  return sha256(sha256(bytes));
-}
-
-function hash160(bytes: Uint8Array) {
-  return createHash("ripemd160").update(sha256(bytes)).digest();
-}
-
-function taggedHash(tag: string, bytes: Uint8Array) {
-  const tagHash = sha256(Buffer.from(tag, "utf8"));
-  return sha256(Buffer.concat([tagHash, tagHash, Buffer.from(bytes)]));
-}
 
 function encodeMessageHash(message: string) {
-  const messageBytes = Buffer.from(message, "utf8");
-  const magicBytes = Buffer.from(MESSAGE_MAGIC, "utf8");
-  const payload = Buffer.concat([
-    encodeCompactSize(magicBytes.length),
-    magicBytes,
-    encodeCompactSize(messageBytes.length),
-    messageBytes,
-  ]);
-
-  return hash256(payload);
+  const messageBytes = utf8ToBytes(message);
+  return hash256(
+    concatBytes(
+      LEGACY_MESSAGE_PREFIX,
+      encodeCompactSize(messageBytes.length),
+      messageBytes
+    )
+  );
 }
 
-function toSignatureBuffer(signature: string | Uint8Array) {
-  return typeof signature === "string"
-    ? Buffer.from(signature, "base64")
-    : Buffer.from(signature);
+function toSignatureBytes(signature: string | Uint8Array) {
+  return typeof signature === "string" ? fromBase64(signature) : signature;
 }
 
 function normalizePQPublicKey(publicKey: Uint8Array) {
-  const buffer = Buffer.from(publicKey);
-
   if (
-    buffer.length === PQ_SERIALIZED_PUBKEY_LENGTH &&
-    buffer[0] === PQ_SERIALIZED_PUBKEY_PREFIX
+    publicKey.length === PQ_SERIALIZED_PUBKEY_LENGTH &&
+    publicKey[0] === PQ_SERIALIZED_PUBKEY_PREFIX
   ) {
-    return buffer;
+    return publicKey;
   }
 
-  if (buffer.length === PQ_PUBLIC_KEY_LENGTH) {
-    return Buffer.concat([Buffer.from([PQ_SERIALIZED_PUBKEY_PREFIX]), buffer]);
+  if (publicKey.length === PQ_PUBLIC_KEY_LENGTH) {
+    return concatBytes(Uint8Array.of(PQ_SERIALIZED_PUBKEY_PREFIX), publicKey);
   }
 
   throw new Error("Invalid PQ public key length");
 }
 
 function isPQMessageSignature(signature: string | Uint8Array) {
-  const buffer = toSignatureBuffer(signature);
-  return buffer.length > 0 && buffer[0] === PQ_MESSAGE_SIGNATURE_PREFIX;
+  try {
+    const bytes = toSignatureBytes(signature);
+    return bytes.length > 0 && bytes[0] === PQ_MESSAGE_SIGNATURE_PREFIX;
+  } catch {
+    return false;
+  }
 }
 
 function decodePQAddress(address: string) {
-  const decoded = bech32m.decode(address);
+  const decoded = bech32m.decode(asBech32String(address));
   if (decoded.words.length === 0) {
     throw new Error("Invalid bech32m address");
   }
@@ -143,21 +78,21 @@ function decodePQAddress(address: string) {
   return {
     prefix: decoded.prefix,
     version: decoded.words[0],
-    program: Buffer.from(bech32m.fromWords(decoded.words.slice(1))),
+    program: bech32m.fromWords(decoded.words.slice(1)),
   };
 }
 
 function getDefaultPQAuthScriptCommitment(serializedPublicKey: Uint8Array) {
-  const authDescriptor = Buffer.concat([
-    Buffer.from([AUTHSCRIPT_DEFAULT_AUTH_TYPE]),
-    hash160(serializedPublicKey),
-  ]);
+  const authDescriptor = concatBytes(
+    Uint8Array.of(AUTHSCRIPT_DEFAULT_AUTH_TYPE),
+    hash160(serializedPublicKey)
+  );
   const witnessScriptHash = sha256(AUTHSCRIPT_DEFAULT_WITNESS_SCRIPT);
-  const preimage = Buffer.concat([
-    Buffer.from([AUTHSCRIPT_DOMAIN_SEPARATOR]),
+  const preimage = concatBytes(
+    Uint8Array.of(AUTHSCRIPT_DOMAIN_SEPARATOR),
     authDescriptor,
-    witnessScriptHash,
-  ]);
+    witnessScriptHash
+  );
 
   return taggedHash(AUTHSCRIPT_TAG, preimage);
 }
@@ -166,12 +101,12 @@ function getDefaultPQAuthScriptCommitment(serializedPublicKey: Uint8Array) {
 export function sign(message: string, privateKey: Uint8Array, compressed = true) {
   const signature = signLegacyMessage(
     message,
-    Buffer.from(privateKey),
+    privateKey,
     compressed,
     LEGACY_MESSAGE_PREFIX
   );
 
-  return signature.toString("base64");
+  return toBase64(signature);
 }
 
 export function signPQMessage(
@@ -181,29 +116,29 @@ export function signPQMessage(
 ) {
   const serializedPublicKey = normalizePQPublicKey(publicKey);
   const hash = encodeMessageHash(message);
-  const pqSignature = Buffer.from(ml_dsa44.sign(hash, Buffer.from(privateKey)));
+  const pqSignature = ml_dsa44.sign(hash, privateKey);
 
-  const payload = Buffer.concat([
-    Buffer.from([PQ_MESSAGE_SIGNATURE_PREFIX]),
+  const payload = concatBytes(
+    Uint8Array.of(PQ_MESSAGE_SIGNATURE_PREFIX),
     encodeCompactSize(serializedPublicKey.length),
     serializedPublicKey,
     encodeCompactSize(pqSignature.length),
-    pqSignature,
-  ]);
+    pqSignature
+  );
 
-  return payload.toString("base64");
+  return toBase64(payload);
 }
 
 export function verifyLegacyMessage(
   message: string,
   address: string,
   signature: string | Uint8Array
-) {
+): boolean {
   try {
     return verifyLegacyCompactMessage(
       message,
       address,
-      toSignatureBuffer(signature),
+      toSignatureBytes(signature),
       LEGACY_MESSAGE_PREFIX
     );
   } catch {
@@ -215,9 +150,9 @@ export function verifyPQMessage(
   message: string,
   address: string,
   signature: string | Uint8Array
-) {
+): boolean {
   try {
-    const payload = toSignatureBuffer(signature);
+    const payload = toSignatureBytes(signature);
     let offset = 0;
 
     if (payload[offset++] !== PQ_MESSAGE_SIGNATURE_PREFIX) {
@@ -262,7 +197,7 @@ export function verifyPQMessage(
     const expectedProgram = getDefaultPQAuthScriptCommitment(
       serializedPublicKey
     );
-    if (!expectedProgram.equals(decodedAddress.program)) {
+    if (!bytesEqual(expectedProgram, decodedAddress.program)) {
       return false;
     }
 
@@ -280,7 +215,7 @@ export function verifyMessage(
   message: string,
   address: string,
   signature: string | Uint8Array
-) {
+): boolean {
   return isPQMessageSignature(signature)
     ? verifyPQMessage(message, address, signature)
     : verifyLegacyMessage(message, address, signature);

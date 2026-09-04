@@ -1,26 +1,20 @@
-import { Buffer } from "buffer";
 import { hmac } from "@noble/hashes/hmac.js";
-import { sha256 as nobleSha256 } from "@noble/hashes/sha2.js";
+import { sha256 } from "@noble/hashes/sha2.js";
 import * as secp256k1 from "@noble/secp256k1";
-import { bech32 } from "bech32";
-import bs58check from "bs58check";
-import createHash from "create-hash";
-import varuint from "varuint-bitcoin";
+import { bech32, createBase58check } from "@scure/base";
+import {
+  asBech32String,
+  bytesEqual,
+  concatBytes,
+  encodeCompactSize,
+  utf8ToBytes,
+} from "./bytes";
+import { hash160, hash256 } from "./hash";
 
-secp256k1.hashes.hmacSha256 = (key, msg) => hmac(nobleSha256, key, msg);
-secp256k1.hashes.sha256 = nobleSha256;
+secp256k1.hashes.hmacSha256 = (key, msg) => hmac(sha256, key, msg);
+secp256k1.hashes.sha256 = sha256;
 
-function sha256(bytes: Uint8Array) {
-  return createHash("sha256").update(bytes).digest();
-}
-
-function hash256(bytes: Uint8Array) {
-  return sha256(sha256(bytes));
-}
-
-function hash160(bytes: Uint8Array) {
-  return createHash("ripemd160").update(sha256(bytes)).digest();
-}
+const base58check = createBase58check(sha256);
 
 function encodeCompactSignature(
   signature: Uint8Array,
@@ -31,15 +25,15 @@ function encodeCompactSignature(
   if (compressed) {
     header += 4;
   }
-  return Buffer.concat([Buffer.from([header]), Buffer.from(signature)]);
+  return concatBytes(Uint8Array.of(header), signature);
 }
 
-function decodeCompactSignature(buffer: Buffer) {
-  if (buffer.length !== 65) {
+function decodeCompactSignature(bytes: Uint8Array) {
+  if (bytes.length !== 65) {
     throw new Error("Invalid signature length");
   }
 
-  const flagByte = buffer.readUInt8(0) - 27;
+  const flagByte = bytes[0] - 27;
   if (flagByte < 0 || flagByte > 15) {
     throw new Error("Invalid signature parameter");
   }
@@ -47,7 +41,7 @@ function decodeCompactSignature(buffer: Buffer) {
   return {
     compressed: !!(flagByte & 12),
     recovery: flagByte & 3,
-    signature: buffer.subarray(1),
+    signature: bytes.subarray(1),
     segwitType: !(flagByte & 8)
       ? null
       : !(flagByte & 4)
@@ -57,43 +51,34 @@ function decodeCompactSignature(buffer: Buffer) {
 }
 
 function decodeBech32Address(address: string) {
-  const result = bech32.decode(address);
-  return Buffer.from(bech32.fromWords(result.words.slice(1)));
+  const result = bech32.decode(asBech32String(address));
+  return bech32.fromWords(result.words.slice(1));
 }
 
 function segwitRedeemHash(publicKeyHash: Uint8Array) {
-  const redeemScript = Buffer.concat([
-    Buffer.from("0014", "hex"),
-    Buffer.from(publicKeyHash),
-  ]);
+  const redeemScript = concatBytes(Uint8Array.of(0x00, 0x14), publicKeyHash);
   return hash160(redeemScript);
 }
 
-export function magicHash(message: string | Buffer, messagePrefix: string | Buffer) {
-  const prefix = Buffer.isBuffer(messagePrefix)
-    ? messagePrefix
-    : Buffer.from(messagePrefix, "utf8");
-  const payload = Buffer.isBuffer(message)
-    ? message
-    : Buffer.from(message, "utf8");
-  const messageVISize = varuint.encodingLength(payload.length);
-  const buffer = Buffer.allocUnsafe(prefix.length + messageVISize + payload.length);
+export function magicHash(
+  message: string | Uint8Array,
+  messagePrefix: string | Uint8Array
+) {
+  const prefix =
+    typeof messagePrefix === "string" ? utf8ToBytes(messagePrefix) : messagePrefix;
+  const payload = typeof message === "string" ? utf8ToBytes(message) : message;
 
-  prefix.copy(buffer, 0);
-  varuint.encode(payload.length, buffer, prefix.length);
-  payload.copy(buffer, prefix.length + messageVISize);
-
-  return hash256(buffer);
+  return hash256(concatBytes(prefix, encodeCompactSize(payload.length), payload));
 }
 
 export function signLegacyMessage(
   message: string,
   privateKey: Uint8Array,
   compressed: boolean,
-  messagePrefix: string | Buffer
+  messagePrefix: string | Uint8Array
 ) {
   const hash = magicHash(message, messagePrefix);
-  const recoveredSignature = secp256k1.sign(hash, Buffer.from(privateKey), {
+  const recoveredSignature = secp256k1.sign(hash, privateKey, {
     prehash: false,
     format: "recovered",
   });
@@ -108,33 +93,32 @@ export function verifyLegacyCompactMessage(
   message: string,
   address: string,
   signature: Uint8Array,
-  messagePrefix: string | Buffer
+  messagePrefix: string | Uint8Array
 ) {
-  const parsed = decodeCompactSignature(Buffer.from(signature));
+  const parsed = decodeCompactSignature(signature);
   const hash = magicHash(message, messagePrefix);
-  const recoveredSignature = Buffer.concat([
-    Buffer.from([parsed.recovery]),
-    Buffer.from(parsed.signature),
-  ]);
-  const publicKey = Buffer.from(
-    secp256k1.recoverPublicKey(recoveredSignature, hash, {
-      prehash: false,
-    })
+  const recoveredSignature = concatBytes(
+    Uint8Array.of(parsed.recovery),
+    parsed.signature
   );
+  const publicKey = secp256k1.recoverPublicKey(recoveredSignature, hash, {
+    prehash: false,
+  });
   const normalizedPublicKey = parsed.compressed
     ? publicKey
-    : Buffer.from(secp256k1.Point.fromBytes(publicKey).toBytes(false));
+    : secp256k1.Point.fromBytes(publicKey).toBytes(false);
   const publicKeyHash = hash160(normalizedPublicKey);
 
   if (parsed.segwitType === "p2sh(p2wpkh)") {
-    return segwitRedeemHash(publicKeyHash).equals(
-      Buffer.from(bs58check.decode(address).slice(1))
+    return bytesEqual(
+      segwitRedeemHash(publicKeyHash),
+      base58check.decode(address).slice(1)
     );
   }
 
   if (parsed.segwitType === "p2wpkh") {
-    return publicKeyHash.equals(decodeBech32Address(address));
+    return bytesEqual(publicKeyHash, decodeBech32Address(address));
   }
 
-  return publicKeyHash.equals(Buffer.from(bs58check.decode(address).slice(1)));
+  return bytesEqual(publicKeyHash, base58check.decode(address).slice(1));
 }

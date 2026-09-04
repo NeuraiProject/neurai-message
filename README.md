@@ -1,6 +1,6 @@
 # neurai-message
 
-Sign and verify messages in Neurai in JavaScript for Node.js and modern browsers.
+Sign and verify messages in Neurai in JavaScript for Node.js, modern browsers and React Native.
 
 ## Scope
 
@@ -13,9 +13,12 @@ The package supports two formats:
 
 ## Implementation notes
 
+- the package is pure `Uint8Array`: it does not use `Buffer`, `create-hash`, Node streams or any polyfill
+- hashes come from `@noble/hashes` (`sha256`, `ripemd160`)
+- base58check, bech32 / bech32m and base64 come from `@scure/base`
 - `legacy` signing and recovery are implemented locally on top of `@noble/secp256k1`
 - `PQ` signing and verification use `@noble/post-quantum/ml-dsa.js`
-- the package no longer depends on `bitcoinjs-message`, `secp256k1`, or `elliptic`
+- the package does not depend on `bitcoinjs-message`, `secp256k1`, `elliptic`, `bs58check`, `bech32`, `varuint-bitcoin` or `create-hash`
 
 ## Post-Quantum note
 
@@ -29,19 +32,42 @@ Instead, the exported signature embeds the serialized public key and the `ML-DSA
 - confirm that 32-byte commitment matches the witness v1 program in the address
 - verify the `ML-DSA-44` signature over the Neurai message hash
 
-The generic `verifyMessage(...)` function now auto-detects both formats. Use `sign(...)` for legacy and `signPQMessage(...)` for PQ.
+The generic `verifyMessage(...)` function auto-detects both formats. Use `sign(...)` for legacy and `signPQMessage(...)` for PQ.
 
 `signPQMessage(...)` expects the ML-DSA-44 secret key and the corresponding public key, either raw (`1312` bytes) or serialized as `0x05 || pubkey`.
 
-Legacy PQ witness-v1 keyhash addresses (`OP_1 <20-byte-hash>`) are intentionally not supported anymore. The package now matches the current Neurai `AuthScript` destination model (`OP_1 <32-byte-commitment>`).
+Legacy PQ witness-v1 keyhash addresses (`OP_1 <20-byte-hash>`) are intentionally not supported anymore. The package matches the current Neurai `AuthScript` destination model (`OP_1 <32-byte-commitment>`).
+
+## Signature input format
+
+`verifyMessage`, `verifyLegacyMessage` and `verifyPQMessage` accept the signature either as bytes (`Uint8Array`) or as a base64 string. A base64 string is accepted when it is:
+
+- standard base64 (RFC 4648 section 4) **or** URL-safe base64 (section 5), but not a mix of both alphabets
+- with or without trailing `=` padding (redundant padding is rejected)
+- with whitespace anywhere (it is ignored)
+- canonical: non-zero trailing bits before the padding (for example `QUJ=`) are rejected
+
+Anything else, including characters outside the alphabet, makes verification return `false`. Versions before `0.10.0` silently dropped invalid characters, so a valid signature with garbage inserted in it could verify; it no longer does. Signatures produced by `sign(...)` and `signPQMessage(...)` are always padded standard base64, the same as the Neurai node.
 
 ## Package outputs
 
-This package now publishes explicit entry points:
+This package publishes explicit entry points:
 
-- `@neuraiproject/neurai-message`: main API for Node.js and bundlers
-- `@neuraiproject/neurai-message/browser`: browser ESM build
+- `@neuraiproject/neurai-message`: main API for Node.js, bundlers and React Native
+- `@neuraiproject/neurai-message/browser`: browser ESM build (kept for compatibility, equivalent to the main build)
 - `@neuraiproject/neurai-message/global`: global bundle for `<script src>`
+
+## React Native
+
+With Hermes and `TextEncoder` available (React Native 0.74 and later), `verifyMessage` and `sign` work without any Node polyfill configuration.
+
+`signPQMessage` needs `crypto.getRandomValues`, because ML-DSA hedged signing draws 32 random bytes. Add one of these to the app entry point:
+
+```js
+import "react-native-get-random-values"; // or expo-crypto
+```
+
+Legacy `sign` does not need it (RFC 6979 deterministic signatures). On Hermes older than 0.74 a `TextEncoder` polyfill is required as well.
 
 ## install
 
@@ -62,8 +88,7 @@ const CoinKey = require("coinkey");
 
 //Sign
 {
-  //Address RVDUQTULaceEudDsgqCQBT6bfcdqUSvJPV
-  //Public Key 031c5142f11f629bad27dd567c41e189ee23eccd9b57561fd0ff7c96b2cc9a0a0f
+  //Address NfrFWhPKcMQ7BbFGWtsAnaC6G5qEUSsD4f
   const privateKeyWIF = "L1JHsDosNU9FeUYB24Pixwkxs56pwCrj5rdtuKHXTcWBJTDLGNa7";
 
   //Convert WIF to private key
@@ -76,42 +101,37 @@ const CoinKey = require("coinkey");
 
 //Verify
 {
-  const address = "RS4EYELZhxMtDAuyrQimVrcSnaeaLCXeo6";
+  const address = "NfrFWhPKcMQ7BbFGWtsAnaC6G5qEUSsD4f";
   const message = "Hello world";
   const signature =
-    "H2zo48+tI/KT9eJrHt7PLiEBMaRn1A1Eh49IFu0MbfhAFBxVc0FG2UE5E79PCbhd9KexijsQxYvNM6AsVn9EAEo=";
+    "INJ8K1/nuezPfnaK3CXKqwESCepBlwQbsfKkjGKnMwctfSt1SwiLh9qBBpdeaJD3NmpHTqH13WikaG9iXUDmtkM=";
 
   console.log("Verify", verifyMessage(message, address, signature));
 }
 
-//PQ sign / verify
+//PQ sign / verify (works the same in Node.js, browsers and React Native)
 {
   const { ml_dsa44 } = require("@noble/post-quantum/ml-dsa.js");
-  const { bech32m } = require("bech32");
-  const crypto = require("crypto");
+  const { sha256 } = require("@noble/hashes/sha2.js");
+  const { ripemd160 } = require("@noble/hashes/legacy.js");
+  const { concatBytes, utf8ToBytes } = require("@noble/hashes/utils.js");
+  const { bech32m } = require("@scure/base");
   const { signPQMessage, verifyPQMessage } = require("@neuraiproject/neurai-message");
 
   function taggedHash(tag, bytes) {
-    const tagHash = crypto.createHash("sha256").update(tag).digest();
-    return crypto.createHash("sha256").update(Buffer.concat([tagHash, tagHash, bytes])).digest();
+    const tagHash = sha256(utf8ToBytes(tag));
+    return sha256(concatBytes(tagHash, tagHash, bytes));
   }
 
   const keys = ml_dsa44.keygen();
-  const serializedPubKey = Buffer.concat([Buffer.from([0x05]), Buffer.from(keys.publicKey)]);
-  const authDescriptor = Buffer.concat([
-    Buffer.from([0x01]),
-    crypto.createHash("ripemd160").update(
-      crypto.createHash("sha256").update(serializedPubKey).digest()
-    ).digest(),
-  ]);
-  const witnessScriptHash = crypto.createHash("sha256").update(Buffer.from([0x51])).digest(); // OP_TRUE
+  const serializedPubKey = concatBytes(Uint8Array.of(0x05), keys.publicKey);
+  const authDescriptor = concatBytes(Uint8Array.of(0x01), ripemd160(sha256(serializedPubKey)));
+  const witnessScriptHash = sha256(Uint8Array.of(0x51)); // OP_TRUE
   const commitment = taggedHash(
     "NeuraiAuthScript",
-    Buffer.concat([Buffer.from([0x01]), authDescriptor, witnessScriptHash])
+    concatBytes(Uint8Array.of(0x01), authDescriptor, witnessScriptHash)
   );
-  const words = bech32m.toWords(commitment);
-  words.unshift(1);
-  const address = bech32m.encode("tnq", words);
+  const address = bech32m.encode("tnq", [1, ...bech32m.toWords(commitment)]);
 
   const message = "Hello PQ world";
   const signature = signPQMessage(message, keys.secretKey, keys.publicKey);
@@ -141,7 +161,17 @@ import { signPQMessage, verifyMessage } from "@neuraiproject/neurai-message/brow
 ## Development
 
 ```bash
-npm test
+npm test              # build + vitest
+npm run check:neutral # fails if any Node built-in sneaks into the bundle
 ```
 
-Tests run with `vitest` and cover both `legacy` and `PQ` flows.
+Tests run with `vitest` and cover both `legacy` and `PQ` flows. `test/vectors.json` holds reference vectors generated with `0.9.1` (P2PKH compressed and uncompressed, P2WPKH, P2SH-P2WPKH and PQ) that every later version must keep verifying, and the suite also runs the global bundle inside a sandbox without `Buffer` or `process`.
+
+## Changelog
+
+### 0.10.0
+
+- Pure `Uint8Array` implementation. Removed `Buffer`, `create-hash`, `bs58check`, `bech32`, `varuint-bitcoin` and the browser shims (`buffer`, `process`, `stream-browserify`). New dependency: `@scure/base`.
+- Works in React Native without Node polyfills (see above).
+- No API changes. Signatures are byte-identical to `0.9.1`.
+- Stricter base64 parsing of signature strings (see "Signature input format").
