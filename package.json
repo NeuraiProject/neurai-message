@@ -1,6 +1,6 @@
 {
   "name": "@neuraiproject/neurai-message",
-  "version": "0.10.2",
+  "version": "0.11.0",
   "description": "Sign and Verify messages in Neurai",
   "source": "index.ts",
   "main": "dist/index.cjs",
@@ -8,20 +8,29 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.mjs",
-      "require": "./dist/index.cjs"
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./browser": {
-      "types": "./dist/index.d.ts",
+      "types": "./dist/index.d.mts",
       "import": "./dist/browser.mjs"
     },
     "./global": "./dist/NeuraiMessage.global.js"
   },
   "scripts": {
-    "test": "npm run build && vitest run",
-    "build": "esbuild src/index.ts --bundle --platform=node --target=es2020 --format=cjs --outfile=dist/index.cjs && esbuild src/index.ts --bundle --platform=node --target=es2020 --format=esm --outfile=dist/index.mjs && esbuild src/browser.ts --bundle --platform=browser --target=es2020 --format=esm --main-fields=browser,module,main --outfile=dist/browser.mjs && esbuild src/global.ts --bundle --platform=browser --target=es2020 --format=iife --global-name=NeuraiMessage --main-fields=browser,module,main --outfile=dist/NeuraiMessage.global.js && tsc --emitDeclarationOnly --declaration --outDir dist",
-    "check:neutral": "esbuild src/index.ts --bundle --platform=neutral --main-fields=module,main --format=esm --outfile=/dev/null"
+    "test": "npm run build && vitest run && npm run test:types",
+    "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && esbuild src/index.ts --bundle --platform=node --target=es2020 --format=cjs --outfile=dist/index.cjs && esbuild src/index.ts --bundle --platform=node --target=es2020 --format=esm --outfile=dist/index.mjs && esbuild src/browser.ts --bundle --platform=browser --target=es2020 --format=esm --main-fields=browser,module,main --outfile=dist/browser.mjs && esbuild src/global.ts --bundle --platform=browser --target=es2020 --format=iife --global-name=NeuraiMessage --main-fields=browser,module,main --outfile=dist/NeuraiMessage.global.js && tsc --emitDeclarationOnly --declaration --outDir dist/types && rollup -c rollup.dts.config.mjs",
+    "test:types": "tsc -p tsconfig.types-nodenext.json && tsc -p tsconfig.types-node16.json && tsc -p tsconfig.types-bundler.json",
+    "test:package": "npm run build && node scripts/check-package.mjs",
+    "check:neutral": "esbuild src/index.ts --bundle --platform=neutral --main-fields=module,main --format=esm --outfile=/dev/null",
+    "prepack": "npm run build"
   },
   "repository": {
     "type": "git",
@@ -45,7 +54,9 @@
   },
   "devDependencies": {
     "esbuild": "^0.25.0",
-    "typescript": "^6.0.3",
+    "rollup": "^4.63.4",
+    "rollup-plugin-dts": "^6.5.1",
+    "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   }
 }

@@ -28,6 +28,10 @@ function encodeCompactSignature(
   return concatBytes(Uint8Array.of(header), signature);
 }
 
+// Header byte rules of bitcoinjs-message: 27-30 uncompressed P2PKH, 31-34
+// compressed P2PKH, 35-38 P2SH-P2WPKH and 39-42 P2WPKH. The last two ranges
+// (`segwitType`) are deprecated: the Neurai node has no P2SH-P2WPKH or
+// Bech32 witness v0 message signatures, see `verifyLegacyCompactMessage`.
 function decodeCompactSignature(bytes: Uint8Array) {
   if (bytes.length !== 65) {
     throw new Error("Invalid signature length");
@@ -50,6 +54,7 @@ function decodeCompactSignature(bytes: Uint8Array) {
   };
 }
 
+/** @deprecated Bech32 witness v0 addresses are not Neurai addresses. */
 function decodeBech32Address(address: string) {
   const result = bech32.decode(asBech32String(address));
   return bech32.fromWords(result.words.slice(1));
@@ -71,13 +76,16 @@ export function magicHash(
   return hash256(concatBytes(prefix, encodeCompactSize(payload.length), payload));
 }
 
-export function signLegacyMessage(
-  message: string,
+/**
+ * 65-byte compact recoverable signature of a 32-byte hash, like the node's
+ * `CKey::SignCompact`: RFC 6979 deterministic, low-S, header
+ * `27 + recovery (+ 4 when compressed)` followed by `r || s`.
+ */
+export function signCompactHash(
+  hash: Uint8Array,
   privateKey: Uint8Array,
-  compressed: boolean,
-  messagePrefix: string | Uint8Array
+  compressed: boolean
 ) {
-  const hash = magicHash(message, messagePrefix);
   const recoveredSignature = secp256k1.sign(hash, privateKey, {
     prehash: false,
     format: "recovered",
@@ -89,6 +97,58 @@ export function signLegacyMessage(
   );
 }
 
+/**
+ * Recovers the public key of a compact signature with the exact rules of the
+ * node's `CPubKey::RecoverCompact`: 65 bytes, recovery id
+ * `(header - 27) & 3`, compressed when `(header - 27) & 4` is set. Returns
+ * `null` when no key can be recovered.
+ */
+export function recoverCompactPublicKey(hash: Uint8Array, signature: Uint8Array) {
+  if (signature.length !== 65) {
+    return null;
+  }
+
+  const recovery = (signature[0] - 27) & 3;
+  const compressed = ((signature[0] - 27) & 4) !== 0;
+  try {
+    const publicKey = secp256k1.recoverPublicKey(
+      concatBytes(Uint8Array.of(recovery), signature.subarray(1)),
+      hash,
+      { prehash: false }
+    );
+    return {
+      compressed,
+      publicKey: compressed
+        ? publicKey
+        : secp256k1.Point.fromBytes(publicKey).toBytes(false),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Compressed (33-byte) secp256k1 public key of a private key. */
+export function getCompressedPublicKey(privateKey: Uint8Array) {
+  return secp256k1.getPublicKey(privateKey, true);
+}
+
+export function signLegacyMessage(
+  message: string,
+  privateKey: Uint8Array,
+  compressed: boolean,
+  messagePrefix: string | Uint8Array
+) {
+  return signCompactHash(magicHash(message, messagePrefix), privateKey, compressed);
+}
+
+/**
+ * Legacy compact-signature verification against a Base58 address.
+ *
+ * The P2SH-P2WPKH (header 35-38, Base58 P2SH address) and P2WPKH (header
+ * 39-42, Bech32 witness v0 address) branches are deprecated: they are kept
+ * so that signatures made with earlier versions keep verifying, but the
+ * Neurai node rejects both address kinds in `verifymessage`.
+ */
 export function verifyLegacyCompactMessage(
   message: string,
   address: string,
@@ -109,6 +169,7 @@ export function verifyLegacyCompactMessage(
     : secp256k1.Point.fromBytes(publicKey).toBytes(false);
   const publicKeyHash = hash160(normalizedPublicKey);
 
+  // Deprecated branches, not node-compatible (see above).
   if (parsed.segwitType === "p2sh(p2wpkh)") {
     return bytesEqual(
       segwitRedeemHash(publicKeyHash),

@@ -1,0 +1,9 @@
+{
+  // Same consumers as a bundler (Vite, webpack…) project resolves them.
+  // "Preserve" keeps both `import` and `import x = require()` syntax.
+  "extends": "./tsconfig.types-nodenext.json",
+  "compilerOptions": {
+    "module": "Preserve",
+    "moduleResolution": "Bundler"
+  }
+}

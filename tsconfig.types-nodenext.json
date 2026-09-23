@@ -1,0 +1,18 @@
+{
+  // Type-checks the published declarations the way applications consume
+  // them: ESM (dist/index.d.mts), CommonJS (dist/index.d.ts) and the browser
+  // entry, with skipLibCheck: false (tsc's default) so errors inside the
+  // declarations are reported. NodeNext here; see the -node16 and -bundler
+  // variants.
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": false,
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "types": []
+  },
+  "files": ["types-test/consumer.mts", "types-test/consumer.cts", "types-test/consumer-browser.mts"]
+}
