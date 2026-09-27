@@ -46,9 +46,9 @@ const MODE = dockerAvailable()
 
 const BASE_PORT = 22000 + (process.pid % 8000);
 const DATADIR = `/tmp/neurai-message-regtest-${process.pid}`;
-// PQ wallet (nc1p / pq1z / nq1r addresses) and classic wallet (legacy / nq1r).
+// PQ wallet (strict pq1z / nq1r addresses) and classic wallet (legacy / nq1r).
 const NODES = {
-  pq: { datadir: `${DATADIR}/pq`, rpcPort: BASE_PORT, p2pPort: BASE_PORT + 1, extra: ["-pqwallet=1"] },
+  pq: { datadir: `${DATADIR}/pq`, rpcPort: BASE_PORT, p2pPort: BASE_PORT + 1, extra: ["-addresstype=pq", "-bip44=1"] },
   classic: { datadir: `${DATADIR}/classic`, rpcPort: BASE_PORT + 2, p2pPort: BASE_PORT + 3, extra: [] },
 };
 const MESSAGE = "neurai-message regtest ✓";
@@ -106,6 +106,24 @@ function decodeWIF(wif) {
 
 const addresses = {};
 
+function v1AddressFromPqSignature(signature) {
+  const bytes = Buffer.from(signature, "base64");
+  const serializedPublicKey = bytes.subarray(4, 4 + 1313);
+  const sha256 = (data) => createHash("sha256").update(data).digest();
+  const tagHash = sha256(Buffer.from("NeuraiAuthScript"));
+  const hash160 = createHash("ripemd160").update(sha256(serializedPublicKey)).digest();
+  const commitment = sha256(
+    Buffer.concat([
+      tagHash,
+      tagHash,
+      Buffer.from([0x01, 0x01]),
+      hash160,
+      sha256(Buffer.from([0x51])),
+    ])
+  );
+  return bech32m.encode("tnc", [1, ...bech32m.toWords(commitment)]);
+}
+
 describe.skipIf(MODE === "skip")("message signatures against a regtest node", () => {
   beforeAll(async () => {
     const neuraid = MODE === "docker" ? CONTAINER_NEURAID : LOCAL_NEURAID;
@@ -137,8 +155,7 @@ describe.skipIf(MODE === "skip")("message signatures against a regtest node", ()
       }
       if (!ready) throw new Error("neuraid did not come up");
     }
-    addresses.authscript = cli(NODES.pq, "getnewaddress");
-    addresses.pq = cli(NODES.pq, "getnewaddress", "", "pq");
+    addresses.pq = cli(NODES.pq, "getnewaddress");
     addresses.ecdsa = cli(NODES.pq, "getnewaddress", "", "ecdsa");
     addresses.p2pkh = cli(NODES.classic, "getnewaddress");
     addresses.classicEcdsa = cli(NODES.classic, "getnewaddress", "", "ecdsa");
@@ -159,9 +176,8 @@ describe.skipIf(MODE === "skip")("message signatures against a regtest node", ()
 
   const ownerOf = (name) =>
     name === "p2pkh" || name === "classicEcdsa" ? NODES.classic : NODES.pq;
-  const names = ["authscript", "pq", "ecdsa", "p2pkh", "classicEcdsa"];
+  const names = ["pq", "ecdsa", "p2pkh", "classicEcdsa"];
   const expectedType = {
-    authscript: "authscript",
     pq: "pq",
     ecdsa: "ecdsa",
     p2pkh: "p2pkh",
@@ -172,7 +188,6 @@ describe.skipIf(MODE === "skip")("message signatures against a regtest node", ()
     for (const name of names) {
       expect(decodeAddress(addresses[name]).type, addresses[name]).toBe(expectedType[name]);
     }
-    expect(addresses.authscript).toMatch(/^tnc1p/);
     expect(addresses.pq).toMatch(/^tpq1z/);
     expect(addresses.ecdsa).toMatch(/^tnq1r/);
   });
@@ -199,7 +214,7 @@ describe.skipIf(MODE === "skip")("message signatures against a regtest node", ()
       expect(cli(node, "verifymessage", addresses[name], signature, libraryMessage)).toBe("true");
       expect(cli(node, "verifymessage", addresses[name], signature, `${libraryMessage}!`)).toBe("false");
     }
-    for (const name of ["authscript", "pq"]) {
+    for (const name of ["pq"]) {
       const key = decodeWIF(cli(NODES.pq, "dumpprivkey", addresses[name]));
       expect(key.length).toBe(2560 + 1312);
       const signature = signPQMessage(
@@ -218,29 +233,16 @@ describe.skipIf(MODE === "skip")("message signatures against a regtest node", ()
   test("a v2 signature is rejected at the v1 address of the same key by both", () => {
     // Same ML-DSA key, re-derived v1 address: the node signs the bound hash for v2.
     const signature = cli(NODES.pq, "signmessage", addresses.pq, MESSAGE);
-    const bytes = Buffer.from(signature, "base64");
-    const serializedPublicKey = bytes.subarray(4, 4 + 1313);
-    const sha256 = (data) => createHash("sha256").update(data).digest();
-    const tagHash = sha256(Buffer.from("NeuraiAuthScript"));
-    const hash160 = createHash("ripemd160").update(sha256(serializedPublicKey)).digest();
-    const commitment = sha256(
-      Buffer.concat([
-        tagHash,
-        tagHash,
-        Buffer.from([0x01, 0x01]),
-        hash160,
-        sha256(Buffer.from([0x51])),
-      ])
-    );
-    const v1Address = bech32m.encode("tnc", [1, ...bech32m.toWords(commitment)]);
+    const v1Address = v1AddressFromPqSignature(signature);
     expect(cli(NODES.pq, "validateaddress", v1Address)).toContain('"isvalid": true');
     expect(cli(NODES.pq, "verifymessage", v1Address, signature, MESSAGE)).toBe("false");
     expect(verifyMessage(MESSAGE, v1Address, signature)).toBe(false);
   });
 
   test("old tnq1p… v1 encoding is an invalid address for both", () => {
-    const signature = cli(NODES.pq, "signmessage", addresses.authscript, MESSAGE);
-    const oldAddress = bech32m.encode("tnq", bech32m.decode(addresses.authscript).words);
+    const signature = cli(NODES.pq, "signmessage", addresses.pq, MESSAGE);
+    const v1Address = v1AddressFromPqSignature(signature);
+    const oldAddress = bech32m.encode("tnq", bech32m.decode(v1Address).words);
     expect(cliError(NODES.pq, "verifymessage", oldAddress, signature, MESSAGE)).toMatch(
       /Invalid address/
     );

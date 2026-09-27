@@ -24,7 +24,7 @@ The node only accepts the canonical Bech32m prefix / witness version pairs `nc`/
 
 Other address kinds cannot sign messages in the node: Base58 P2SH ("Address does not refer to key"), Bech32 witness v0 (`nq1q…`, "Invalid address") and generic v1 addresses whose commitment is not the default single-PQ-key one (NoAuth, secp256k1 `authType 0x02`, custom witness scripts). See "Deprecated legacy signatures" for the P2SH-P2WPKH / P2WPKH signatures that earlier versions produced.
 
-Note that the node only decodes `pq1…` / `nq1…` addresses on chains where the strict families are active (regtest from genesis, testnet from block 440000, not scheduled on mainnet at the time of writing); this package is stateless and does not check activation.
+Note that the node only decodes `pq1…` / `nq1…` addresses on chains where the strict families are active (regtest from block 1, reset testnet from block 10, not scheduled on mainnet at the time of writing); this package is stateless and does not check activation.
 
 ## Implementation notes
 
